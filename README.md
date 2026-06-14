@@ -1,6 +1,6 @@
-# Pre-training a tiny protein language model
+# Tiny pLM: Training tiny protein language models
 
-Small masked language model (MLM) pretraining experiments on UniRef50 subsets.
+Tiny masked language model (MLM) pretraining experiments on UniRef50 subsets.
 
 ## Setup
 
@@ -39,7 +39,6 @@ train-tiny --config configs/<config_name>.toml
 train-tiny --config configs/40k.toml
 train-tiny --config configs/800k.toml
 ```
-
 
 ## Outputs
 

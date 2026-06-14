@@ -13,3 +13,5 @@ artifacts/**/*.json
 
 # Virtual environments
 .venv
+
+.env

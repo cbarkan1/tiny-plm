@@ -1,5 +1,5 @@
 [project]
-name = "plm-pretraining"
+name = "tiny-plm"
 version = "0.1.0"
 description = "Training a simple protein language model"
 readme = "README.md"
