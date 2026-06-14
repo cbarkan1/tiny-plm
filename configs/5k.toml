@@ -1,0 +1,25 @@
+seed = 42
+epochs = 1
+split_name = "5k"
+device = "cpu"
+
+[paths]
+train_fasta = "data/splits/5k/train.fasta"
+validation_fasta = "data/splits/5k/validation.fasta"
+checkpoint_path = "artifacts/5k/1epoch.pt"
+run_metadata_path = "artifacts/5k/1epoch_metrics.json"
+train_loss_svg_path = "artifacts/5k/1epoch_loss.svg"
+
+[train]
+max_len = 256
+batch_size = 16
+mask_prob = 0.15
+lr = 0.0002
+weight_decay = 0.01
+
+[model]
+d_model = 128
+n_heads = 4
+d_ff = 512
+n_layers = 2
+dropout = 0.1
