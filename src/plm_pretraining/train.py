@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from pathlib import Path
 
 import torch
@@ -10,42 +9,29 @@ from tqdm.auto import tqdm
 
 AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWYXBZUO"
 SPECIAL_TOKENS = ("<pad>", "<mask>", "<unk>")
+TOKENS = SPECIAL_TOKENS + tuple(AMINO_ACIDS)
+STOI = {token: i for i, token in enumerate(TOKENS)}
+ITOS = {i: token for token, i in STOI.items()}
 
 IGNORE_INDEX = -100
-
-def build_vocab() -> tuple[dict[str, int], dict[int, str]]:
-    tokens = list(SPECIAL_TOKENS) + list(AMINO_ACIDS)
-    stoi = {token: i for i, token in enumerate(tokens)}
-    itos = {i: token for token, i in stoi.items()}
-    return stoi, itos
-
-
-@dataclass(frozen=True)
-class TrainConfig:
-    max_len: int = 256
-    batch_size: int = 16
-    mask_prob: float = 0.15
-    lr: float = 2e-4
-    weight_decay: float = 0.01 # L2 regularizer, shrinks all weights by this factor each step
 
 
 class MLMDataset(Dataset):
     def __init__(
         self,
         fasta_path: str | Path,
-        stoi: dict[str, int],
         max_len: int = 256,
         mask_prob: float = 0.15,
     ) -> None:
         self.records = list(SeqIO.parse(str(fasta_path), "fasta"))
-        self.stoi = stoi
+        self.stoi = STOI
         self.max_len = max_len
         self.mask_prob = mask_prob
 
-        self.pad_id = stoi["<pad>"]
-        self.mask_id = stoi["<mask>"]
-        self.unk_id = stoi["<unk>"]
-        self.vocab_size = len(stoi)
+        self.pad_id = STOI["<pad>"]
+        self.mask_id = STOI["<mask>"]
+        self.unk_id = STOI["<unk>"]
+        self.vocab_size = len(STOI)
 
     def __len__(self) -> int:
         return len(self.records)
@@ -54,6 +40,10 @@ class MLMDataset(Dataset):
         ids = [self.stoi.get(ch, self.unk_id) for ch in sequence[: self.max_len]]
         n = len(ids)
         pad = self.max_len - n
+        
+        # We don't need .to(device) here because Dataset __getitem__/_encode methods are routinely called on the CPU,
+        # before data is handed off to the DataLoader/collate_fn and then transferred to the device (e.g., GPU) as a batch.
+        # This keeps data loading and preprocessing efficient and avoids unnecessary device transfers for each item.
         input_ids = torch.tensor(ids + [self.pad_id] * pad, dtype=torch.long)
         attention_mask = torch.tensor([1] * n + [0] * pad, dtype=torch.long)
         return input_ids, attention_mask
@@ -68,9 +58,16 @@ class MLMDataset(Dataset):
         keep original token IDs at masked positions and use IGNORE_INDEX elsewhere 
         for loss ignore.
         """
+
+        # labels will become the ground truth for training. All non-masked positions will be ignored,
+        # as training is only over masked positions
         labels = input_ids.clone()
+
         rand = torch.rand(input_ids.shape)
-        maskable = attention_mask.bool()
+        maskable = attention_mask.bool() # Don't mask <pad> tokens
+
+        # The '&' operator performs elementwise logical AND on boolean tensors; 
+        # Python's built-in 'and' cannot be used because it only works on single booleans, not tensors.
         masked_positions = (rand < self.mask_prob) & maskable
 
         # The ~ operator inverts the boolean mask, so here it selects positions that are NOT masked.
@@ -92,6 +89,13 @@ class MLMDataset(Dataset):
         return masked_input_ids, labels
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """
+        Returns dict with datapoint (input_ids) and ground truth label from which loss will be computed.
+        In this case, the datapoint is the sequence with mlm applied (some positions 
+        masked, others mutated randomly, others unchanged) and the ground truth label
+        is the original sequence with non-maskable positions ignored (because those aren't
+        used for computing loss).
+        """
         sequence = str(self.records[idx].seq)
         input_ids, attention_mask = self._encode(sequence)
         input_ids, labels = self._apply_mlm(input_ids, attention_mask)
@@ -100,23 +104,6 @@ class MLMDataset(Dataset):
             "attention_mask": attention_mask,
             "labels": labels,
         }
-
-
-def create_dataloader(
-    fasta_path: str | Path,
-    stoi: dict[str, int],
-    batch_size: int = 16,
-    max_len: int = 256,
-    mask_prob: float = 0.15,
-    shuffle: bool = True,
-) -> DataLoader:
-    dataset = MLMDataset(
-        fasta_path=fasta_path,
-        stoi=stoi,
-        max_len=max_len,
-        mask_prob=mask_prob,
-    )
-    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
 
 def train_one_epoch(
@@ -135,17 +122,32 @@ def train_one_epoch(
     iterator = tqdm(dataloader, desc=progress_desc, leave=False)
 
     for batch in iterator:
+
+        # .to(device) is needed for tensors that will be processed by the model or used in computations on a specific device.
+        # In general, use .to(device) for all input data before passing it to the model or performing calculations involving tensors.
         input_ids = batch["input_ids"].to(device)
         attention_mask = batch["attention_mask"].to(device)
         labels = batch["labels"].to(device)
 
+        # Using set_to_none=True isn't strictly required but can be more efficient
         optimizer.zero_grad(set_to_none=True)
+
+        # Forward pass to build the computation graph needed to calculate gradients
+        # Recall that attention_mask here is just to prevent <pad> tokens from being
+        # used in the attention calculations
         logits = model(input_ids, attention_mask=attention_mask)
-        # Compute the cross-entropy loss by flattening logits and labels so each token is a prediction;
-        # logits are reshaped to (batch_size * seq_len, vocab_size), labels to (batch_size * seq_len)
-        loss = loss_fn(logits.view(-1, logits.size(-1)), labels.view(-1))
+
+        # Flatten logits and labels and compute loss
+        batch_size, seq_len, vocab_size = logits.shape
+        loss = loss_fn(logits.view(batch_size*seq_len, vocab_size), labels.view(batch_size*seq_len))
+        
         loss.backward()
+
+        # model.parameters() is an iterator over a series of objects containing the gradient info
+        # It mutates each of those in place in order to scale down the norm of the gradinet if
+        # the norm is over 1.
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
         optimizer.step()
 
         batch_loss = loss.item()
@@ -164,7 +166,7 @@ def evaluate(
     device: torch.device,
     progress_desc: str = "val",
 ) -> float:
-    model.eval()
+    model.eval() # tells model not to use dropout
     loss_fn = nn.CrossEntropyLoss(ignore_index=IGNORE_INDEX)
     total_loss = 0.0
     total_steps = 0
@@ -177,7 +179,8 @@ def evaluate(
         labels = batch["labels"].to(device)
 
         logits = model(input_ids, attention_mask=attention_mask)
-        loss = loss_fn(logits.view(-1, logits.size(-1)), labels.view(-1))
+        batch_size, seq_len, vocab_size = logits.shape
+        loss = loss_fn(logits.view(batch_size*seq_len, vocab_size), labels.view(batch_size*seq_len))
         total_loss += loss.item()
         total_steps += 1
         iterator.set_postfix(loss=f"{loss.item():.4f}")

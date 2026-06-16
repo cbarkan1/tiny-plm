@@ -11,6 +11,7 @@ def load_train_loss(json_path):
 json_paths = [
     Path("artifacts/800k/800k_1epoch_metrics.json"),
     Path("artifacts/40k/40k_1epoch_metrics.json"),
+    Path("artifacts/40k_s2/1epoch_metrics.json"),
     Path("artifacts/5k/1epoch_metrics.json"),
 ]
 

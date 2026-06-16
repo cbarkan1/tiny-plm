@@ -8,9 +8,10 @@ from pathlib import Path
 import tomllib
 
 import torch
+from torch.utils.data import DataLoader
 
 from plm_pretraining.tiny_protein_lm import TinyProteinLM
-from plm_pretraining.train import TrainConfig, build_vocab, create_dataloader, evaluate, train_one_epoch
+from plm_pretraining.train import MLMDataset, STOI, evaluate, train_one_epoch
 from plm_pretraining.utils import save_loss_plot
 
 
@@ -81,37 +82,31 @@ def main() -> None:
     random.seed(run_cfg.seed)
     torch.manual_seed(run_cfg.seed)
     device = torch.device(run_cfg.device)
-    config = TrainConfig(
-        max_len=run_cfg.max_len,
+
+    pad_id = STOI["<pad>"]
+
+    train_loader = DataLoader(
+        MLMDataset(
+            fasta_path=run_cfg.train_fasta,
+            max_len=run_cfg.max_len,
+            mask_prob=run_cfg.mask_prob,
+        ),
         batch_size=run_cfg.batch_size,
-        mask_prob=run_cfg.mask_prob,
-        lr=run_cfg.lr,
-        weight_decay=run_cfg.weight_decay,
-    )
-
-    stoi, _ = build_vocab()
-    pad_id = stoi["<pad>"]
-
-    train_loader = create_dataloader(
-        fasta_path=run_cfg.train_fasta,
-        stoi=stoi,
-        batch_size=config.batch_size,
-        max_len=config.max_len,
-        mask_prob=config.mask_prob,
         shuffle=True,
     )
-    validation_loader = create_dataloader(
-        fasta_path=run_cfg.validation_fasta,
-        stoi=stoi,
-        batch_size=config.batch_size,
-        max_len=config.max_len,
-        mask_prob=config.mask_prob,
+    validation_loader = DataLoader(
+        MLMDataset(
+            fasta_path=run_cfg.validation_fasta,
+            max_len=run_cfg.max_len,
+            mask_prob=run_cfg.mask_prob,
+        ),
+        batch_size=run_cfg.batch_size,
         shuffle=False,
     )
 
     model = TinyProteinLM(
-        vocab_size=len(stoi),
-        max_len=config.max_len,
+        vocab_size=len(STOI),
+        max_len=run_cfg.max_len,
         d_model=run_cfg.d_model,
         n_heads=run_cfg.n_heads,
         d_ff=run_cfg.d_ff,
@@ -120,10 +115,11 @@ def main() -> None:
         pad_token_id=pad_id,
     ).to(device)
 
+    # AdamW is adam with decoupled weight decay
     optimizer = torch.optim.AdamW(
         model.parameters(),
-        lr=config.lr,
-        weight_decay=config.weight_decay,
+        lr=run_cfg.lr,
+        weight_decay=run_cfg.weight_decay,
     )
 
     initial_val_loss = evaluate(model, validation_loader, device, progress_desc="val   init")
@@ -172,7 +168,7 @@ def main() -> None:
         {
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
-            "config": config,
+            "config": run_cfg,
             "seed": run_cfg.seed,
             "epochs": run_cfg.epochs,
         },

@@ -7,6 +7,7 @@ Tiny masked language model (MLM) pretraining experiments on UniRef50 subsets.
 ```bash
 uv sync
 ```
+To install uv, `curl -LsSf https://astral.sh/uv/install.sh | sh`
 
 ## Download and split UniRef50 data
 
