@@ -37,8 +37,6 @@ Training are specified in TOML files in `configs/`.
 Run training with
 ```bash
 train-tiny --config configs/<config_name>.toml
-train-tiny --config configs/40k.toml
-train-tiny --config configs/800k.toml
 ```
 
 ## Outputs
