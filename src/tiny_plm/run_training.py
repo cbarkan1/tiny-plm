@@ -10,9 +10,9 @@ import tomllib
 import torch
 from torch.utils.data import DataLoader
 
-from plm_pretraining.tiny_protein_lm import TinyProteinLM
-from plm_pretraining.train import MLMDataset, STOI, evaluate, train_one_epoch
-from plm_pretraining.utils import save_loss_plot
+from tiny_plm.tiny_protein_lm import TinyProteinLM
+from tiny_plm.train import MLMDataset, STOI, evaluate, train_one_epoch
+from tiny_plm.utils import save_loss_plot
 
 
 @dataclass(frozen=True)
